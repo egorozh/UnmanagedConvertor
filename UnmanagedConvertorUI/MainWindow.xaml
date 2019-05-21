@@ -1,0 +1,40 @@
+﻿<Window x:Class="UnmanagedConvertorUI.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        Icon="csharpicon.ico"
+        Title="Unmanaged Exporter by Egor Zheludkov" 
+        Height="174" Width="440" 
+        Background="#FF252526" Foreground="White">
+    <Grid Margin="10,10,10,10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <Grid >
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="Путь к dll: " VerticalAlignment="Center" FontSize="14" />
+            <TextBox Grid.Column="1" x:Name="DllPathTextbox" />
+            <Button Grid.Column="2" Content="..." Margin="2,0,0,0" Height="20" Width="20" Click="SelectDllPath" />
+        </Grid>
+
+        <TextBlock Grid.Row="1"
+                   Background="BlanchedAlmond"
+                   Drop="UIElement_OnDrop"
+                   AllowDrop="True"
+                   Margin="0,5,0,5"
+                   Foreground="Black">
+            Переместите сюда...
+        </TextBlock>
+        <Button Grid.Row="2" Margin="0,5,0,0" 
+                Height="40" FontSize="16"
+                Background="#FF686868"
+                Click="Build" Foreground="White">Пересобрать dll</Button>
+    </Grid>
+</Window>
