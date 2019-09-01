@@ -13,51 +13,61 @@ namespace UnmanagedBuilder
             if (!File.Exists(dllPath))
                 return;
 
-            try
-            {
-                var fileInfo = new FileInfo(dllPath);
+            var result = new Result<string> {Value = dllPath}
+                .Bind(DisasmDll)
+                .Bind(WriteSpecificUnmanagedCode)
+                .Bind(CompileDll)
+                .Bind(DeleteFiles);
 
-                var res = GetIlasmAndIldasmPaths(out var pathToIlasm, out var pathToIldasm);
+            if (!result.IsSuccess)
+                WriteLog(result.Error.Message);
+        }
+        
+        private static Result<string> GetIldasmPath(Result<object> prevResult)
+        {
+            var result = new Result<string>();
 
-                if (res)
-                {
-                    var fullName = fileInfo.FullName;
+            var pathToIldasm = ConfigurationManager.AppSettings.Get("ildasmpath");
 
-                    var path = DisasmDll(fullName, fileInfo, pathToIldasm);
+            if (!File.Exists(pathToIldasm))
+                result.Error = new Exception("Путь к дизассемблеру неверен!");
 
-                    WriteSpecificUnmanagedCode(path);
+            result.Value = pathToIldasm;
 
-                    CompileDll(pathToIlasm, path);
-                    File.Delete(path);
-                    File.Delete(path.Substring(0, path.LastIndexOf(".", StringComparison.Ordinal)) + ".res");
-                    foreach (var file in new DirectoryInfo(fileInfo.DirectoryName).GetFiles("*.resources"))
-                        File.Delete(file.FullName);
-                }
-            }
-            catch (Exception ex)
-            {
-                WriteLog(ex.Message);
-            }
+            return result;
         }
 
-        private static void CompileDll(string pathToIlasm, string path)
+        private static Result<string> DisasmDll(Result<string> dllPathResult)
         {
-            var arguments = " /DLL /OPTIMIZE /RESOURCE=\"" +
-                            path.Substring(0, path.LastIndexOf(".", StringComparison.Ordinal)) +
-                            ".res\" \"" +
-                            path + "\"";
+            var ilFileNameResult = GetIlFileName(dllPathResult);
 
-            var process = new Process
+            var arguments = " /utf8 /OUT=\"" + ilFileNameResult.Value + "\" \"" + dllPathResult.Value + "\"";
+
+            var pathToIldasm = GetIldasmPath(new Result<object>()).Value;
+
+            var process = new Process()
             {
-                StartInfo = new ProcessStartInfo(pathToIlasm, arguments)
+                StartInfo = new ProcessStartInfo(pathToIldasm, arguments)
             };
             process.Start();
             process.WaitForExit();
+
+            return ilFileNameResult;
         }
 
-        private static void WriteSpecificUnmanagedCode(string path)
+        private static Result<string> GetIlFileName(Result<string> dllPathResult)
         {
-            var builder = new StringBuilder(File.ReadAllText(path));
+            var result = new Result<string>();
+
+            var dllPath = dllPathResult.Value;
+            result.Value = dllPath.Substring(0, dllPath.LastIndexOf(".", StringComparison.Ordinal)) + ".il";
+
+            return result;
+        }
+
+        private static Result<string> WriteSpecificUnmanagedCode(Result<string> ilFileNameResult)
+        {
+            var builder = new StringBuilder(File.ReadAllText(ilFileNameResult.Value));
 
             var builder2 = builder.Replace(".corflags 0x00000001", ".corflags 0x00000002");
 
@@ -75,46 +85,66 @@ namespace UnmanagedBuilder
             }
 
             var bytes = Encoding.UTF8.GetBytes(builder2.ToString());
-            using (var fileStream = new FileStream(path, FileMode.Create))
+            using (var fileStream = new FileStream(ilFileNameResult.Value, FileMode.Create))
             {
                 fileStream.WriteByte(239);
                 fileStream.WriteByte(187);
                 fileStream.WriteByte(191);
                 fileStream.Write(bytes, 0, bytes.Length);
             }
+
+            return ilFileNameResult;
         }
 
-        private static string DisasmDll(string fullName, FileInfo fileInfo, string pathToIldasm)
+        private static Result<string> GetIlasmPath(Result<object> prevResult)
         {
-            var path = fullName.Substring(0, fullName.LastIndexOf(".", StringComparison.Ordinal)) + ".il";
-            var arguments = " /utf8 /OUT=\"" + path + "\" \"" + fileInfo.FullName + "\"";
-            var process = new Process()
+            var result = new Result<string>();
+
+            var pathToIlasm = ConfigurationManager.AppSettings.Get("ilasmpath");
+
+            if (!File.Exists(pathToIlasm))
+                result.Error = new Exception("Путь к ассемблеру неверен!");
+
+            result.Value = pathToIlasm;
+
+            return result;
+        }
+
+        private static Result<string> CompileDll(Result<string> ilFileNameResult)
+        {
+            var path = ilFileNameResult.Value;
+
+            var arguments = " /DLL /OPTIMIZE /RESOURCE=\"" +
+                            path.Substring(0, path.LastIndexOf(".", StringComparison.Ordinal)) +
+                            ".res\" \"" +
+                            path + "\"";
+
+            var pathToIlasm = GetIlasmPath(new Result<object>()).Value;
+
+            var process = new Process
             {
-                StartInfo = new ProcessStartInfo(pathToIldasm, arguments)
+                StartInfo = new ProcessStartInfo(pathToIlasm, arguments)
             };
             process.Start();
             process.WaitForExit();
-            return path;
+
+            return ilFileNameResult;
         }
 
-        private static bool GetIlasmAndIldasmPaths(out string pathToIlasm, out string pathToIldasm)
+        private static Result<string> DeleteFiles(Result<string> ilFileNameResult)
         {
-            pathToIlasm = ConfigurationManager.AppSettings.Get("ilasmpath");
-            pathToIldasm = ConfigurationManager.AppSettings.Get("ildasmpath");
+            var path = ilFileNameResult.Value;
+            var fileInfo = new FileInfo(path);
 
-            if (!File.Exists(pathToIlasm))
-            {
-                WriteLog("Путь к ассемблеру неверен!");
-                return false;
-            }
+            var directory = new DirectoryInfo(fileInfo.DirectoryName);
 
-            if (!File.Exists(pathToIldasm))
-            {
-                WriteLog("Путь к дизассемблеру неверен!");
-                return false;
-            }
 
-            return true;
+            File.Delete(path);
+            File.Delete(path.Substring(0, path.LastIndexOf(".", StringComparison.Ordinal)) + ".res");
+            foreach (var file in directory.GetFiles("*.resources"))
+                File.Delete(file.FullName);
+
+            return ilFileNameResult;
         }
 
         private static void WriteLog(string message)
@@ -122,6 +152,26 @@ namespace UnmanagedBuilder
             var streamWriter = new StreamWriter(Environment.CurrentDirectory + "\\Error.txt");
             streamWriter.WriteLine(message);
             streamWriter.Close();
+        }
+    }
+
+    public class Result<T>
+    {
+        public T Value { get; set; }
+
+        public Exception Error { get; set; }
+
+        public bool IsSuccess => Error == null;
+    }
+
+    public static class Extensions
+    {
+        public static Result<R> Bind<T, R>(this Result<T> input, Func<Result<T>, Result<R>> nextFunction)
+            where R : class
+        {
+            return input.IsSuccess
+                ? nextFunction(input)
+                : new Result<R> {Error = input.Error};
         }
     }
 }
