@@ -8,12 +8,13 @@ namespace UnmanagedBuilder
 {
     public class UnmanagedBuilder
     {
+        /// <summary>
+        /// Получение dll c экспортируемыми функциями
+        /// </summary>
+        /// <param name="dllPath">Путь к dll</param>
         public static void Build(string dllPath)
         {
-            if (!File.Exists(dllPath))
-                return;
-
-            var result = new Result<string> {Value = dllPath}
+            var result = ValidationPath(dllPath)
                 .Bind(DisasmDll)
                 .Bind(WriteSpecificUnmanagedCode)
                 .Bind(CompileDll)
@@ -22,35 +23,64 @@ namespace UnmanagedBuilder
             if (!result.IsSuccess)
                 WriteLog(result.Error.Message);
         }
-        
-        private static Result<string> GetIldasmPath(Result<object> prevResult)
+
+        #region Private Methods
+
+        /// <summary>
+        /// Проверка валидности пути к библиотеке
+        /// </summary>
+        /// <param name="path"></param>
+        /// <returns></returns>
+        private static Result<string> ValidationPath(string path)
         {
             var result = new Result<string>();
 
-            var pathToIldasm = ConfigurationManager.AppSettings.Get("ildasmpath");
-
-            if (!File.Exists(pathToIldasm))
-                result.Error = new Exception("Путь к дизассемблеру неверен!");
-
-            result.Value = pathToIldasm;
+            if (!File.Exists(path))
+                result.Error = new Exception("Файла по данному пути не существует");
+            else if (!path.EndsWith(".dll"))
+                result.Error = new Exception("Файл имеет расширение отличное от .\"dll\"");
+            else
+                result.Value = path;
 
             return result;
         }
 
+        /// <summary>
+        /// Дизассемблирование сборки
+        /// </summary>
+        /// <param name="dllPathResult">Путь к dll</param>
+        /// <returns></returns>
         private static Result<string> DisasmDll(Result<string> dllPathResult)
         {
             var ilFileNameResult = GetIlFileName(dllPathResult);
 
-            var arguments = " /utf8 /OUT=\"" + ilFileNameResult.Value + "\" \"" + dllPathResult.Value + "\"";
-
-            var pathToIldasm = GetIldasmPath(new Result<object>()).Value;
-
-            var process = new Process()
+            if (ilFileNameResult.IsSuccess)
             {
-                StartInfo = new ProcessStartInfo(pathToIldasm, arguments)
-            };
-            process.Start();
-            process.WaitForExit();
+                var arguments = " /utf8 /OUT=\"" + ilFileNameResult.Value + "\" \"" + dllPathResult.Value + "\"";
+
+                var pathToIldasm = GetIldasmPath(new Result<object>());
+
+                if (pathToIldasm.IsSuccess)
+                {
+                    try
+                    {
+                        var process = new Process
+                        {
+                            StartInfo = new ProcessStartInfo(pathToIldasm.Value, arguments)
+                        };
+                        process.Start();
+                        process.WaitForExit();
+                    }
+                    catch (Exception exception)
+                    {
+                        ilFileNameResult.Error = exception;
+                    }
+                }
+                else
+                {
+                    ilFileNameResult.Error = pathToIldasm.Error;
+                }
+            }
 
             return ilFileNameResult;
         }
@@ -59,38 +89,113 @@ namespace UnmanagedBuilder
         {
             var result = new Result<string>();
 
-            var dllPath = dllPathResult.Value;
-            result.Value = dllPath.Substring(0, dllPath.LastIndexOf(".", StringComparison.Ordinal)) + ".il";
+            try
+            {
+                var dllPath = dllPathResult.Value;
+                result.Value = dllPath.Substring(0, dllPath.LastIndexOf(".", StringComparison.Ordinal)) + ".il";
+            }
+            catch (Exception exception)
+            {
+                result.Error = exception;
+            }
 
             return result;
         }
 
+        private static Result<string> GetIldasmPath(Result<object> prevResult)
+        {
+            var result = new Result<string>();
+
+            var pathToIldasm = ConfigurationManager.AppSettings.Get("ildasmpath");
+
+            if (!File.Exists(pathToIldasm))
+                result.Error = new Exception("ildasm.exe по данному пути отсутствует");
+            if (!pathToIldasm.EndsWith("ildasm.exe"))
+                result.Error = new Exception("Путь к дизассемблеру неверен!");
+            else
+                result.Value = pathToIldasm;
+
+            return result;
+        }
+
+        /// <summary>
+        /// Изменяем IL код для экспорта функций, помеченных атрибутом <see cref="System.Reflection.ObfuscationAttribute"/>
+        /// </summary>
+        /// <param name="ilFileNameResult">Путь к il-файлу</param>
+        /// <returns></returns>
         private static Result<string> WriteSpecificUnmanagedCode(Result<string> ilFileNameResult)
         {
-            var builder = new StringBuilder(File.ReadAllText(ilFileNameResult.Value));
-
-            var builder2 = builder.Replace(".corflags 0x00000001", ".corflags 0x00000002");
-
-            var num1 = 0;
-            int num2;
-            for (var startIndex = builder2.ToString()
-                    .IndexOf("System.Reflection.ObfuscationAttribute", 0, StringComparison.Ordinal);
-                startIndex != -1;
-                startIndex = builder2.ToString()
-                    .IndexOf("System.Reflection.ObfuscationAttribute", num2, StringComparison.Ordinal))
+            try
             {
-                ++num1;
-                num2 = builder2.ToString().IndexOf("// llExport\r\n", startIndex, StringComparison.Ordinal) + 13;
-                builder2 = builder2.Insert(num2, "    .export[" + num1 + "]\r\n");
+                var builder = new StringBuilder(File.ReadAllText(ilFileNameResult.Value));
+
+                var builder2 = builder.Replace(".corflags 0x00000001", ".corflags 0x00000002");
+
+                var num1 = 0;
+                int num2;
+                for (var startIndex = builder2.ToString()
+                        .IndexOf("System.Reflection.ObfuscationAttribute", 0, StringComparison.Ordinal);
+                    startIndex != -1;
+                    startIndex = builder2.ToString()
+                        .IndexOf("System.Reflection.ObfuscationAttribute", num2, StringComparison.Ordinal))
+                {
+                    ++num1;
+                    num2 = builder2.ToString().IndexOf("// llExport\r\n", startIndex, StringComparison.Ordinal) + 13;
+                    builder2 = builder2.Insert(num2, "    .export[" + num1 + "]\r\n");
+                }
+
+                var bytes = Encoding.UTF8.GetBytes(builder2.ToString());
+                using (var fileStream = new FileStream(ilFileNameResult.Value, FileMode.Create))
+                {
+                    fileStream.WriteByte(239);
+                    fileStream.WriteByte(187);
+                    fileStream.WriteByte(191);
+                    fileStream.Write(bytes, 0, bytes.Length);
+                }
+            }
+            catch (Exception exception)
+            {
+                ilFileNameResult.Error = exception;
             }
 
-            var bytes = Encoding.UTF8.GetBytes(builder2.ToString());
-            using (var fileStream = new FileStream(ilFileNameResult.Value, FileMode.Create))
+            return ilFileNameResult;
+        }
+
+        /// <summary>
+        /// Компилируем измененный il-код в сборку
+        /// </summary>
+        /// <param name="ilFileNameResult">Путь к il-файлу</param>
+        /// <returns></returns>
+        private static Result<string> CompileDll(Result<string> ilFileNameResult)
+        {
+            var path = ilFileNameResult.Value;
+
+            var arguments = " /DLL /OPTIMIZE /RESOURCE=\"" +
+                            path.Substring(0, path.LastIndexOf(".", StringComparison.Ordinal)) +
+                            ".res\" \"" +
+                            path + "\"";
+
+            var pathToIlasm = GetIlasmPath(new Result<object>());
+
+            if (pathToIlasm.IsSuccess)
             {
-                fileStream.WriteByte(239);
-                fileStream.WriteByte(187);
-                fileStream.WriteByte(191);
-                fileStream.Write(bytes, 0, bytes.Length);
+                try
+                {
+                    var process = new Process
+                    {
+                        StartInfo = new ProcessStartInfo(pathToIlasm.Value, arguments)
+                    };
+                    process.Start();
+                    process.WaitForExit();
+                }
+                catch (Exception exception)
+                {
+                    ilFileNameResult.Error = exception;
+                }
+            }
+            else
+            {
+                ilFileNameResult.Error = pathToIlasm.Error;
             }
 
             return ilFileNameResult;
@@ -103,56 +208,63 @@ namespace UnmanagedBuilder
             var pathToIlasm = ConfigurationManager.AppSettings.Get("ilasmpath");
 
             if (!File.Exists(pathToIlasm))
+                result.Error = new Exception("ilasm.exe по данному пути отсутствует");
+            if (!pathToIlasm.EndsWith("ilasm.exe"))
                 result.Error = new Exception("Путь к ассемблеру неверен!");
-
-            result.Value = pathToIlasm;
+            else
+                result.Value = pathToIlasm;
 
             return result;
         }
 
-        private static Result<string> CompileDll(Result<string> ilFileNameResult)
-        {
-            var path = ilFileNameResult.Value;
-
-            var arguments = " /DLL /OPTIMIZE /RESOURCE=\"" +
-                            path.Substring(0, path.LastIndexOf(".", StringComparison.Ordinal)) +
-                            ".res\" \"" +
-                            path + "\"";
-
-            var pathToIlasm = GetIlasmPath(new Result<object>()).Value;
-
-            var process = new Process
-            {
-                StartInfo = new ProcessStartInfo(pathToIlasm, arguments)
-            };
-            process.Start();
-            process.WaitForExit();
-
-            return ilFileNameResult;
-        }
-
+        /// <summary>
+        /// Удаляем промежуточные файлы
+        /// </summary>
+        /// <param name="ilFileNameResult">Путь к il-файлу</param>
+        /// <returns></returns>
         private static Result<string> DeleteFiles(Result<string> ilFileNameResult)
         {
             var path = ilFileNameResult.Value;
-            var fileInfo = new FileInfo(path);
 
-            var directory = new DirectoryInfo(fileInfo.DirectoryName);
+            try
+            {
+                var fileInfo = new FileInfo(path);
 
-
-            File.Delete(path);
-            File.Delete(path.Substring(0, path.LastIndexOf(".", StringComparison.Ordinal)) + ".res");
-            foreach (var file in directory.GetFiles("*.resources"))
-                File.Delete(file.FullName);
+                var directory = new DirectoryInfo(fileInfo.DirectoryName);
+                
+                File.Delete(path);
+                File.Delete(path.Substring(0, path.LastIndexOf(".", StringComparison.Ordinal)) + ".res");
+                foreach (var file in directory.GetFiles("*.resources"))
+                    File.Delete(file.FullName);
+            }
+            catch (Exception exception)
+            {
+                ilFileNameResult.Error = exception;
+            }
 
             return ilFileNameResult;
         }
 
+        /// <summary>
+        /// Записываем сообщение в лог
+        /// </summary>
+        /// <param name="message"></param>
         private static void WriteLog(string message)
         {
-            var streamWriter = new StreamWriter(Environment.CurrentDirectory + "\\Error.txt");
-            streamWriter.WriteLine(message);
-            streamWriter.Close();
+            try
+            {
+                var streamWriter = new StreamWriter(Environment.CurrentDirectory + "\\Error.txt");
+                streamWriter.WriteLine(message);
+                streamWriter.Close();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
+            }
         }
+
+        #endregion
     }
 
     public class Result<T>
